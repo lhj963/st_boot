@@ -1,13 +1,11 @@
 #include "update.h"
+#include "boot_check.h"
 
 
 //指定地址存放版本号 厂商标识等信息
 const  char ver_info[]  __attribute__ ((at(SOFTWARE_INFO_ADDR))) = 
 "<" MANUFACTURER_FLAG ">" "<" BOOT_VERSION ">" "<" __DATE__ ">" "<" __TIME__ ">"; 
 
-
-
-typedef void (*EntryFunc)(void);
 
 
 unsigned char XOR_Check(INT8U *pdat,INT32U len)
@@ -128,34 +126,118 @@ int export_bin_file(char is_intel,unsigned int readlen)
 }
 
 
+/*
+ * SRAM below the bootloader's RW region (scatter RW_IRAM1 starts at 0x20008000)
+ * survives a system reset and is not zeroed by the bootloader startup.
+ */
+#define BOOT_HF_MAGIC_ADDR	((volatile unsigned int *)0x20000000u)
+#define BOOT_HF_COUNT_ADDR	((volatile unsigned int *)0x20000004u)
+#define BOOT_HF_MAGIC		0x48464C46u
+
+static unsigned int boot_hf_count(void)
+{
+	if (*BOOT_HF_MAGIC_ADDR != BOOT_HF_MAGIC)
+	{
+		return 0;
+	}
+	return *BOOT_HF_COUNT_ADDR;
+}
+
+static void boot_hf_set(unsigned int count)
+{
+	*BOOT_HF_MAGIC_ADDR = BOOT_HF_MAGIC;
+	*BOOT_HF_COUNT_ADDR = count;
+}
+
+static void boot_hf_clear(void)
+{
+	*BOOT_HF_MAGIC_ADDR = 0;
+	*BOOT_HF_COUNT_ADDR = 0;
+}
+
+/* No C prologue. MSP is loaded, PRIMASK is cleared, then the image reset runs. */
+#if defined(__CC_ARM)
+__asm void boot_jump_to_image(unsigned int new_msp, unsigned int reset_pc)
+{
+	MSR MSP, r0
+	MOVS r2, #0
+	MSR PRIMASK, r2
+	ISB
+	BX r1
+}
+#elif defined(__GNUC__)
+__attribute__((naked)) void boot_jump_to_image(unsigned int new_msp, unsigned int reset_pc)
+{
+	(void)new_msp;
+	(void)reset_pc;
+	__asm volatile(
+		"msr msp, r0\n"
+		"movs r2, #0\n"
+		"msr primask, r2\n"
+		"isb\n"
+		"bx r1\n"
+	);
+}
+#else
+void boot_jump_to_image(unsigned int new_msp, unsigned int reset_pc)
+{
+	(void)new_msp;
+	(void)reset_pc;
+}
+#endif
+
+void HardFault_Handler(void)
+{
+	unsigned int n = 0;
+
+	n = boot_hf_count();
+	if (n >= 3u)
+	{
+		/* Recovery was attempted. Stay here instead of resetting forever. */
+		while (1)
+		{
+			__NOP();
+		}
+	}
+	boot_hf_set(n + 1u);
+	NVIC_SystemReset();
+}
+
 //跳转到驱动层
 void JumpToApp(void)
 {
 	uint32_t JumpAddress = 0;
 	uint32_t SpAddress = 0;
-	EntryFunc func;
 
-	//先关中断
-	cpu_int_dis();
-	//export_bin_file(1,94);
+	SpAddress = *(__IO uint32_t *)DRIVER_START_ADDR;
+	JumpAddress = *(__IO uint32_t *)(DRIVER_START_ADDR + 4);
 
-	JumpAddress = *(__IO uint32_t*) (DRIVER_START_ADDR + 4);
-	SpAddress = *(__IO uint32_t*)DRIVER_START_ADDR;
+	if (!boot_vector_is_valid(SpAddress, JumpAddress,
+			RAM_START_ADDR, RAM_END_ADDR,
+			DRIVER_START_ADDR, APP_END_ADDR))
+	{
+		DBG_Print(LEVEL0,"\r\nrefuse jump (SP:%08X Reset:%08X)\r\n",
+			SpAddress, JumpAddress);
+		return;
+	}
 
 	DBG_Print(LEVEL0,"\r\nJump to Driver(Reset:%08X SP:%08X)...\r\n",JumpAddress,SpAddress);
 	delayms(500);	//稍微延时 等待串口打印完毕
 
-	func = (EntryFunc)JumpAddress;
+	gprs_release_before_jump();
+	boot_hf_clear();
 
-  	SysTick->CTRL  &= ~(SysTick_CTRL_ENABLE_Msk);    
+	cpu_int_dis();
+
+  	SysTick->CTRL  &= ~(SysTick_CTRL_ENABLE_Msk);
 	SysTick->LOAD = 0;
 	SysTick->VAL = 0;
 
-	//重新设置中断向量表
 	SCB->VTOR = DRIVER_START_ADDR;
+	__DSB();
+	__ISB();
 
-	__set_MSP(SpAddress);
-	func();
+	boot_jump_to_image(SpAddress, JumpAddress);
 }
 
 static const unsigned short crc16tab[256]= {
@@ -289,47 +371,7 @@ int CheckPackIsOk(void *pHead)
 
 
 
-typedef struct tagDate
-{
-	INT8U year;
-	INT8U month;
-	INT8U day;
-	INT8U hour;
-	INT8U min;
-	INT8U sec;
-}Date;
-
-
-typedef enum tagUpdateStatus
-{
-	UPDATE_STATUS_NO = 0x12,			//未升级
-	UPDATE_STATUS_START = 0x34,			//启动
-	UPDATE_STATUS_FILE_OK = 0x56,		//升级文件校验通过
-	UPDATE_STATUS_UPDATE_OK = 0x78,		//升级完成 BOOT检测到UPDATE_STATUS_FILE_OK 这个状态 
-										//就会升级APP 然后将状态置为UPDATE_STATUS_UPDATE_OK
-	UPDATE_STATUS_UPDATE_FALSE = 0x90,
-}UpdateStatus;
-
-
-typedef struct tagUpdateInfo
-{
-	UpdateStatus eUpdateStatus;						//升级状态
-	INT8U ucUpdateWay;						//升级方式(xmodem FTP TCP等方式)
-	INT32U ulStartAddr;						//在FLASH中存放的起始地址
-	INT32U ulEndAddr;						//结束地址
-	INT32U ulTotalBytes;					//总大小
-	INT16U usTotalPackCnt;						//总包数
-	Date stStartTime;				//起始时间
-	INT32U ulStartTime;				//起始时间
-	Date stEndTime;					//结束时间
-	INT32U ulEndTime;				//结束时间
-	INT32U ulTakeTimes;				//FTP耗时多少
-	INT8S szReportPhone[20];				//升级成功汇报短信号码
-	INT8S szServerAddr[32];
-	INT16U usServerPort;
-	INT8S szUpdateFileName[32];
-}UpdateInfo;
-
+/* UpdateInfo is packed in boot_check.h: magic, fixed-width status, header CRC. */
 UpdateInfo stUpdateInfo;
 unsigned char is_driver_file_flag = 0;	//判断是否是驱动文件
 
@@ -382,6 +424,49 @@ char *GetSubString(char *str,char *pSubStr1,char *pSubStr2,char *pOutBuf,unsigne
 	return 0;
 }
 
+static int image_crc_matches(unsigned long addr, unsigned int total)
+{
+	unsigned int rlen = 0;
+	unsigned int tlen = 0;
+	unsigned char temp[4] = {0};
+	unsigned int crc32 = 0;
+	unsigned int read_crc32 = 0;
+
+	if (total <= 4)
+	{
+		return 0;
+	}
+	tlen = total - 4;
+	while (tlen)
+	{
+		if (tlen > FLASH_PAGE_SIZE)
+		{
+			rlen = FLASH_PAGE_SIZE;
+		}
+		else
+		{
+			rlen = tlen;
+		}
+
+		memcpy(pagebuf,(unsigned char *)addr,rlen);
+		crc32 = calc_crc32(crc32,pagebuf,rlen);
+
+		addr += rlen;
+		tlen -= rlen;
+	}
+
+	memcpy(temp,(unsigned char *)addr,4);
+	read_crc32 = ((unsigned int)temp[0] << 24) + ((unsigned int)temp[1] << 16)
+		+ ((unsigned int)temp[2] << 8) + temp[3];
+	if (crc32 != read_crc32)
+	{
+		DBG_Print(LEVEL0,"crc32 check err.update false.(calc:%08X read:%08X)\r\n",
+							crc32,read_crc32);
+		return 0;
+	}
+	return 1;
+}
+
 //检验文件版本号是否正确
 char is_app_ver_ok(void)
 {
@@ -393,14 +478,20 @@ char is_app_ver_ok(void)
 	char manufacturer[16] = {0};	//厂商标识
 	char old_drv_sv[64] = {0};		//old driver ver
 	char tempbuf[16] = {0};
+	unsigned char installed[101];
+	unsigned int flag = 0;
+	int is_driver = 0;
+	int slot = 0;
+	unsigned int slot_base = 0;
 
-	//读出升级APP的版本信息
-	//spi_flash_read(addr + APP_SOFTWARE_INFO_OFFSET,100,pagebuf,sizeof(pagebuf));
+	if (stUpdateInfo.ulTotalBytes < (SOFTWARE_INFO_OFFSET + 100))
+	{
+		return 0;
+	}
+
+	//读出升级文件的版本信息
 	memcpy(pagebuf,(unsigned char *)(addr + SOFTWARE_INFO_OFFSET),100);
-	memcpy(pagebuf + 110,(unsigned char *)(DRIVER_START_ADDR + SOFTWARE_INFO_OFFSET),100);
-
 	pagebuf[100] = 0;
-	pagebuf[110 + 100] = 0;
 
 	ptr1 = GetSubString((char *)pagebuf,"<",">",manufacturer,sizeof(manufacturer));
 	if (ptr1 == 0)
@@ -418,32 +509,37 @@ char is_app_ver_ok(void)
 		return 0;
 	}
 
-	//LF_DRIVER_FILE_FLAG1 和 软件版本名称同时命中 才认为是驱动文件
-	if (memcmp(sv,LF_DRIVER_FILE_FLAG,strlen(LF_DRIVER_FILE_FLAG)) == 0)
-	{
-		//spi_flash_read(addr + LF_DRIVER_FILE_FLAG1_OFFSET,100,pagebuf,sizeof(pagebuf));
-		memcpy(pagebuf,(unsigned char *)(addr + LF_DRIVER_FILE_FLAG1_OFFSET),100);
-		
-		if ((*(unsigned int *)pagebuf) == LF_DRIVER_FILE_FLAG1)
-		{
-			is_driver_file_flag = 1;
-		}
-		else
-		{
-			is_driver_file_flag = 0;
-			DBG_Print(LEVEL0,"the file is not driver file"
-			"[driver file flag1 must:%08X this file flag1:%08X]\r\n",
-			LF_DRIVER_FILE_FLAG1,(*(unsigned int *)pagebuf));
-		}
-	}
-	else
+	memcpy(&flag,(unsigned char *)(addr + LF_DRIVER_FILE_FLAG1_OFFSET),4);
+	if (!boot_classify_image(sv,LF_DRIVER_FILE_FLAG,flag,LF_DRIVER_FILE_FLAG1,&is_driver))
 	{
 		is_driver_file_flag = 0;
+		DBG_Print(LEVEL0,"the file is not driver file"
+		"[driver file flag1 must:%08X this file flag1:%08X]\r\n",
+		LF_DRIVER_FILE_FLAG1,flag);
+		return 0;
 	}
+	is_driver_file_flag = (unsigned char)is_driver;
 
 	if (is_driver_file_flag)
 	{
-		ptr1 = GetSubString((char *)pagebuf + 110,"<",">",manufacturer,sizeof(manufacturer));
+		slot_base = DRIVER_START_ADDR;
+	}
+	else
+	{
+		slot_base = APP_START_ADDR;
+	}
+	memcpy(installed,(unsigned char *)(slot_base + SOFTWARE_INFO_OFFSET),100);
+	installed[100] = 0;
+	slot = boot_slot_header_state(installed,100,MANUFACTURER_FLAG);
+	if (!boot_slot_allows_install(slot))
+	{
+		DBG_Print(LEVEL0,"installed header manufacturer mismatch\r\n");
+		return 0;
+	}
+
+	if (is_driver_file_flag && (slot == BOOT_SLOT_OK))
+	{
+		ptr1 = GetSubString((char *)installed,"<",">",manufacturer,sizeof(manufacturer));
 		if (ptr1 == 0)
 		{
 			return 1;
@@ -488,13 +584,6 @@ char is_app_ver_ok(void)
 
 char is_update_file_ok(void)
 {
-	unsigned int rlen = 0;
-	unsigned int tlen = stUpdateInfo.ulTotalBytes - 4;
-	unsigned long addr = 0;
-	unsigned char temp[4] = {0};
-	unsigned int crc32 = 0;
-	unsigned int read_crc32 = 0;
-
 	if (stUpdateInfo.ulTotalBytes <= 4)
 	{
 		return 0;
@@ -505,36 +594,7 @@ char is_update_file_ok(void)
 		return 0;
 	}
 
-	addr = stUpdateInfo.ulStartAddr;
-
-	while (tlen)
-	{
-		if (tlen > FLASH_PAGE_SIZE)
-		{
-			rlen = FLASH_PAGE_SIZE;
-		}
-		else
-		{
-			rlen = tlen;
-		}
-
-		memcpy(pagebuf,(unsigned char *)addr,rlen);
-
-		crc32 = calc_crc32(crc32,pagebuf,rlen);		
-
-		addr += rlen;
-		tlen -= rlen;
-	}
-
-	memcpy(temp,(unsigned char *)addr,4);
-	read_crc32 = (temp[0] << 24) + (temp[1] << 16) + (temp[2] << 8) + temp[3];
-	if (crc32 != read_crc32)
-	{
-		DBG_Print(LEVEL0,"crc32 check err.update false.(calc:%08X read:%08X)\r\n",
-							crc32,read_crc32);
-		return 0;
-	}
-	return 1;
+	return (char)image_crc_matches(stUpdateInfo.ulStartAddr,stUpdateInfo.ulTotalBytes);
 }
 
 //返回值0表示失败 1表示成功
@@ -543,18 +603,21 @@ char CarryApp(void)
 	INT32U slen = 0;
 	INT32U addr = stUpdateInfo.ulStartAddr;
 	INT32U len = stUpdateInfo.ulTotalBytes;
-
-
-	enter_update_mode();
+	INT32U dest = APP_START_ADDR;
 
 	if (is_driver_file_flag)
 	{
-		IAP_ProgramInit(DRIVER_START_ADDR,APP_END_ADDR);
+		dest = DRIVER_START_ADDR;
 	}
-	else
+	if (!boot_image_fits_partition(len,dest,APP_END_ADDR))
 	{
-		IAP_ProgramInit(APP_START_ADDR,APP_END_ADDR);
+		DBG_Print(LEVEL0,"image does not fit partition\r\n");
+		return 0;
 	}
+
+	enter_update_mode();
+	/* APP_END_ADDR is the staging start, so this erase cannot walk into the source. */
+	IAP_ProgramInit(dest,APP_END_ADDR);
 
 	DBG_Print(LEVEL0,"carry app to cpu flash.(external flash start addr:%08X filesize:%uKB)\r\n",
 	stUpdateInfo.ulStartAddr,(stUpdateInfo.ulTotalBytes + 1023) / 1024);
@@ -570,15 +633,13 @@ char CarryApp(void)
 			slen = len;
 		}
 
-		//读出来
-		//spi_flash_read(addr,slen,pagebuf,FLASH_PAGE_SIZE);
-		memcpy(pagebuf,(unsigned char *)addr,slen);
-		
-		//DBG_Print(LEVEL0,"addr:%08X slen:%d\r\n",addr,slen);
-		//DBG_PrintBuf(LEVEL0,0,s_readbuf,slen);
-		
-		//写进去 整页写入 最后一包可以不用整页
-		IAP_ProgramWrite(pagebuf,FLASH_PAGE_SIZE);
+		/* Valid tail only; the rest of the page is explicit erased fill. */
+		boot_pad_page(pagebuf,FLASH_PAGE_SIZE,(unsigned char *)addr,slen);
+		if (IAP_ProgramWrite(pagebuf,FLASH_PAGE_SIZE) <= 0)
+		{
+			DBG_Print(LEVEL0,"IAP_ProgramWrite failed\r\n");
+			return 0;
+		}
 
 		len -= slen;
 		addr += slen;
@@ -586,10 +647,58 @@ char CarryApp(void)
 	return 1;
 }
 
+static unsigned int staging_limit(void)
+{
+	unsigned int kb = 0;
+	unsigned int flash_end = UPDATE_FILE_END_ADDR;
+
+	kb = get_cpu_flash_size();
+	if ((kb >= 128u) && (kb <= 2048u))
+	{
+		flash_end = 0x08000000u + (kb * 1024u);
+	}
+	if (flash_end > UPDATE_FILE_END_ADDR)
+	{
+		flash_end = UPDATE_FILE_END_ADDR;
+	}
+	if (flash_end < UPDATE_FILE_START_ADDR)
+	{
+		flash_end = UPDATE_FILE_START_ADDR;
+	}
+	return flash_end;
+}
+
+static void seal_update_info(void)
+{
+	stUpdateInfo.magic = UPDATE_INFO_MAGIC;
+	stUpdateInfo.usLayoutBytes = (uint16_t)sizeof(UpdateInfo);
+	stUpdateInfo.ucLayoutVersion = (uint8_t)UPDATE_INFO_LAYOUT_VER;
+	stUpdateInfo.ulHeaderCrc = 0;
+	stUpdateInfo.ulHeaderCrc = calc_crc32(0,&stUpdateInfo,
+		(unsigned int)(sizeof(stUpdateInfo) - sizeof(stUpdateInfo.ulHeaderCrc)));
+}
+
 void check_remote_update(void)
 {
+	unsigned int crc = 0;
+	int bounds_ok = 0;
+	int file_ok = 0;
+	int writes_ok = 0;
+	int crc_ok = 0;
+	unsigned int dest = APP_START_ADDR;
+
 	memcpy(&stUpdateInfo,(unsigned char *)UPDATE_INFO_START_ADDR,sizeof(stUpdateInfo));
-	//spi_flash_read(UPDATE_INFO_START_ADDR,sizeof(stUpdateInfo),&stUpdateInfo,sizeof(stUpdateInfo));
+	crc = calc_crc32(0,&stUpdateInfo,
+		(unsigned int)(sizeof(stUpdateInfo) - sizeof(stUpdateInfo.ulHeaderCrc)));
+	if (!boot_update_header_ok(&stUpdateInfo,crc))
+	{
+		/* Erased flash is the normal no-update case. Keep that boot quiet. */
+		if (stUpdateInfo.magic != 0xFFFFFFFFu)
+		{
+			DBG_Print(LEVEL0,"update info rejected\r\n");
+		}
+		return;
+	}
 
 	DBG_Print(LEVEL3,"------------------------Update Info------------------------\r\n"
 					 "Update Server:%s:%d DownloadFile:%s\r\n"
@@ -613,25 +722,36 @@ void check_remote_update(void)
 					 );
 
 	//检测到需要升级APP
-	if (stUpdateInfo.eUpdateStatus == UPDATE_STATUS_FILE_OK)
+	if (stUpdateInfo.eUpdateStatus != UPDATE_STATUS_FILE_OK)
 	{
-		//将程序搬移到APP存储区
-		if (is_update_file_ok())
-		{
-			CarryApp();
-			stUpdateInfo.eUpdateStatus = UPDATE_STATUS_UPDATE_OK;
-		}
-		else
-		{
-			stUpdateInfo.eUpdateStatus = UPDATE_STATUS_UPDATE_FALSE;
-		}
-
-
-		stm32_flash_erase_sector(UPDATE_INFO_START_ADDR / ONE_SECTOR_SIZE);
-		stm32_flash_write(UPDATE_INFO_START_ADDR,&stUpdateInfo,sizeof(stUpdateInfo));
-		
-		JumpToApp();
+		return;
 	}
+
+	bounds_ok = boot_update_bounds_ok(stUpdateInfo.ulStartAddr,
+		stUpdateInfo.ulTotalBytes,UPDATE_FILE_START_ADDR,staging_limit());
+	if (bounds_ok)
+	{
+		file_ok = is_update_file_ok();
+	}
+	if (file_ok)
+	{
+		writes_ok = CarryApp();
+	}
+	if (writes_ok)
+	{
+		if (is_driver_file_flag)
+		{
+			dest = DRIVER_START_ADDR;
+		}
+		crc_ok = image_crc_matches(dest,stUpdateInfo.ulTotalBytes);
+	}
+	stUpdateInfo.eUpdateStatus = (uint8_t)boot_commit_status(writes_ok,crc_ok);
+
+	seal_update_info();
+	stm32_flash_erase_sector(UPDATE_INFO_START_ADDR / ONE_SECTOR_SIZE);
+	stm32_flash_write(UPDATE_INFO_START_ADDR,&stUpdateInfo,sizeof(stUpdateInfo));
+
+	JumpToApp();
 }
 
 
@@ -726,6 +846,10 @@ void check_usart_update(void)
 {
 #if 1
 	JumpToApp();
+	while (1)
+	{
+		__NOP();
+	}
 #else
 	static unsigned char cuu_buf[2048] = {0};
 	unsigned int rlen = 0;

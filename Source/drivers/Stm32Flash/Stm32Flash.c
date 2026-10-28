@@ -1,4 +1,5 @@
 #include "Stm32Flash.h"
+#include <string.h>
 
 
 void stm32_flash_disp(unsigned long ulStartAddr,unsigned long ulEndAddr)
@@ -179,27 +180,25 @@ void stm32_flash_erase_sector(unsigned long sector_id)
 
 int Stm32FlashWritePage(uint32_t StartAddress,void *pdat)
 {
-	uint32_t EraseCounter = 0x00, Address = 0x00;
+	uint32_t Address = 0x00;
 	uint32_t Data = 0;
-	uint32_t NbrOfPage = 0x00;
 	volatile FLASH_Status FLASHStatus = FLASH_COMPLETE;
 	uint8_t *ptr = (uint8_t *)pdat;
+	uint8_t *origin = (uint8_t *)pdat;
 
 	if (pdat == 0) return -1;
 	/* Porgram FLASH Bank1 ********************************************************/	   
 	  /* Unlock the Flash Bank1 Program Erase controller */
 	  FLASH_UnlockBank1();
 	
-	  /* Define the number of page to be erased */
-	  NbrOfPage = 1;
-	
 	  /* Clear All pending flags */
 	  FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPRTERR); 
 
-	  /* Erase the FLASH pages */
-	  for(EraseCounter = 0; (EraseCounter < NbrOfPage) && (FLASHStatus == FLASH_COMPLETE); EraseCounter++)
+	  FLASHStatus = FLASH_ErasePage(StartAddress);
+	  if (FLASHStatus != FLASH_COMPLETE)
 	  {
-		FLASHStatus = FLASH_ErasePage(StartAddress);
+		FLASH_LockBank1();
+		return -1;
 	  }
 
 	  /* Program Flash Bank1 */
@@ -214,6 +213,15 @@ int Stm32FlashWritePage(uint32_t StartAddress,void *pdat)
 	  }
 
 	  FLASH_LockBank1();
+	  if (FLASHStatus != FLASH_COMPLETE)
+	  {
+		return -1;
+	  }
+	  /* Read-back the page that was just programmed. */
+	  if (memcmp((const void *)StartAddress, origin, FLASH_PAGE_SIZE) != 0)
+	  {
+		return -1;
+	  }
 
 	return 0;
 }
@@ -233,15 +241,22 @@ int IAP_ProgramInit(unsigned int StartAddress,unsigned int EndAddress)
 
 int IAP_ProgramWrite(void *pdat,unsigned int ulDatLen)
 {
-	if (ulDatLen < FLASH_PAGE_SIZE) return -1;
+	int rc = 0;
+
+	/* One full page. The caller fills unused tail bytes (0xFF), never a previous chunk. */
+	if ((pdat == 0) || (ulDatLen < FLASH_PAGE_SIZE)) return -1;
 	if (s_IapEndAddress && 
 		((s_IapStartAddress + s_WriteCnt * FLASH_PAGE_SIZE) >= s_IapEndAddress))
 	{
 		return -2;
 	}
 
-	Stm32FlashWritePage(s_IapStartAddress + s_WriteCnt * FLASH_PAGE_SIZE,pdat);
+	rc = Stm32FlashWritePage(s_IapStartAddress + s_WriteCnt * FLASH_PAGE_SIZE,pdat);
+	if (rc != 0)
+	{
+		return -1;
+	}
 	s_WriteCnt++;
-	return s_WriteCnt;
+	return (int)s_WriteCnt;
 }
 

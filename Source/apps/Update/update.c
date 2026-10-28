@@ -1,6 +1,26 @@
 #include "update.h"
 #include "boot_check.h"
 
+/* Keep erase/program limits on the driver map. Update info is one page
+ * at 0x0805F000 and must not cover the boot window, the param page, or the MPU log. */
+typedef char flash_map_matches_driver[
+	(BOOT_SIZE == (16 * 1024)) &&
+	(DRIVER_START_ADDR == 0x08004000u) &&
+	(APP_START_ADDR == 0x08010000u) &&
+	(APP_END_ADDR == 0x08030000u) &&
+	(UPDATE_FILE_START_ADDR == APP_END_ADDR) &&
+	(UPDATE_FILE_END_ADDR == 0x0805F000u) &&
+	(UPDATE_INFO_START_ADDR == 0x0805F000u) &&
+	(PARAM_STORE_ADDR == 0x0805F800u) &&
+	(MPU_TIMEOUT_LOG_ADDR == 0x08060000u) &&
+	(UPDATE_INFO_START_ADDR > BOOT_END_ADDR) &&
+	(PARAM_STORE_ADDR == (UPDATE_INFO_START_ADDR + MCU_FLASH_PAGE_SIZE)) &&
+	(MPU_TIMEOUT_LOG_ADDR == (PARAM_STORE_ADDR + MCU_FLASH_PAGE_SIZE)) &&
+	(ONE_SECTOR_SIZE == MCU_FLASH_PAGE_SIZE) &&
+	((UPDATE_INFO_START_ADDR % MCU_FLASH_PAGE_SIZE) == 0) &&
+	(sizeof(UpdateInfo) <= MCU_FLASH_PAGE_SIZE)
+	? 1 : -1];
+
 
 //指定地址存放版本号 厂商标识等信息
 const  char ver_info[]  __attribute__ ((at(SOFTWARE_INFO_ADDR))) = 
@@ -748,6 +768,7 @@ void check_remote_update(void)
 	stUpdateInfo.eUpdateStatus = (uint8_t)boot_commit_status(writes_ok,crc_ok);
 
 	seal_update_info();
+	/* One page at 0x0805F000. The next pages are param store and the MPU log. */
 	stm32_flash_erase_sector(UPDATE_INFO_START_ADDR / ONE_SECTOR_SIZE);
 	stm32_flash_write(UPDATE_INFO_START_ADDR,&stUpdateInfo,sizeof(stUpdateInfo));
 

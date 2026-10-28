@@ -7,13 +7,16 @@
 
 extern unsigned int calc_crc32(unsigned int PartialCrc, void *pbuf, unsigned int Length);
 
-/* Readme map used by the bootloader. */
+/* Driver flash map. OTA is 0x08030000-0x0805F000. Metadata follows. */
 #define MAP_RAM_LO        0x20000000u
 #define MAP_RAM_HI        0x20018000u
 #define MAP_DRIVER        0x08004000u
 #define MAP_APP           0x08010000u
-#define MAP_APP_END       0x08040000u
-#define MAP_STAGING_END   0x08080000u
+#define MAP_APP_END       0x08030000u
+#define MAP_STAGING_END   0x0805F000u
+#define MAP_UPDATE_INFO   0x0805F000u
+#define MAP_PARAM_STORE   0x0805F800u
+#define MAP_MPU_LOG       0x08060000u
 
 static void seal(UpdateInfo *info)
 {
@@ -63,6 +66,11 @@ static void test_vector(void)
 	assert(boot_vector_is_valid(0x20010000u, 0x08004134u,
 		MAP_RAM_LO, MAP_RAM_HI, MAP_DRIVER, MAP_APP_END) == 0);
 	assert(boot_vector_is_valid(0x20010000u, 0x08000101u,
+		MAP_RAM_LO, MAP_RAM_HI, MAP_DRIVER, MAP_APP_END) == 0);
+	/* App reset still inside the executable window, OTA slot is not. */
+	assert(boot_vector_is_valid(0x20010000u, 0x0802FFF1u,
+		MAP_RAM_LO, MAP_RAM_HI, MAP_DRIVER, MAP_APP_END) == 1);
+	assert(boot_vector_is_valid(0x20010000u, 0x08030001u,
 		MAP_RAM_LO, MAP_RAM_HI, MAP_DRIVER, MAP_APP_END) == 0);
 	assert(boot_vector_is_valid(0x20010000u, 0x08040001u,
 		MAP_RAM_LO, MAP_RAM_HI, MAP_DRIVER, MAP_APP_END) == 0);
@@ -114,9 +122,20 @@ static void test_update_info(void)
 	/* No staging on a 256KB part. */
 	assert(boot_update_bounds_ok(MAP_APP_END, 4096u, MAP_APP_END, MAP_APP_END) == 0);
 
+	assert(boot_update_bounds_ok(MAP_APP_END, 188u * 1024u,
+		MAP_APP_END, MAP_STAGING_END) == 1);
+	assert(boot_update_bounds_ok(MAP_APP_END, (188u * 1024u) + 4u,
+		MAP_APP_END, MAP_STAGING_END) == 0);
+	/* Old boot-window page, update info, param store, and MPU log are not the OTA slot. */
+	assert(boot_update_bounds_ok(0x08003000u, 2048u, MAP_APP_END, MAP_STAGING_END) == 0);
+	assert(boot_update_bounds_ok(MAP_UPDATE_INFO, 2048u, MAP_APP_END, MAP_STAGING_END) == 0);
+	assert(boot_update_bounds_ok(MAP_PARAM_STORE, 2048u, MAP_APP_END, MAP_STAGING_END) == 0);
+	assert(boot_update_bounds_ok(MAP_MPU_LOG, 2048u, MAP_APP_END, MAP_STAGING_END) == 0);
+
 	assert(boot_image_fits_partition(100u * 1024u, MAP_APP, MAP_APP_END) == 1);
 	assert(boot_image_fits_partition(0x50000u, MAP_APP, MAP_APP_END) == 0);
-	assert(boot_image_fits_partition(200u * 1024u, MAP_DRIVER, MAP_APP_END) == 1);
+	assert(boot_image_fits_partition(160u * 1024u, MAP_DRIVER, MAP_APP_END) == 1);
+	assert(boot_image_fits_partition(200u * 1024u, MAP_DRIVER, MAP_APP_END) == 0);
 	assert(boot_image_fits_partition(250u * 1024u, MAP_DRIVER, MAP_APP_END) == 0);
 }
 

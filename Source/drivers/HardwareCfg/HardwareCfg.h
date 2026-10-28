@@ -8,30 +8,40 @@ extern "C" {
 #define BOOT_VERSION 	"BYSD_GD32_BOOT_V1.0.3"
 
 /*
- * Map, shared with Source/readme.txt and KeilMDK/output/st_boot.sct:
- *   boot image     0 .. 12KB   (scatter LR_IROM1 is 0x3000)
- *   update param   12KB .. 16KB
- *   driver         16KB .. 64KB
- *   app            64KB .. 256KB
- *   update file    256KB .. 512KB  (staging; not part of the erase window)
- *
- * BOOT_SIZE stays 16KB so DRIVER_START_ADDR remains 0x08004000.
- * APP_END_ADDR is the staging start. Erase-while-copy must not walk into it.
+ * Same internal map as the driver (512KB, 2KB pages):
+ *   0x08000000 boot    16KB   (scatter image is 12KB and stays inside this)
+ *   0x08004000 driver  48KB
+ *   0x08010000 app     until the OTA slot
+ *   0x08030000 OTA image 188KB
+ *   0x0805F000 update info
+ *   0x0805F800 param store
+ *   0x08060000 MPU-timeout log
+ * Update info is not in the boot window (the old slot was 0x08003000).
+ * APP_END_ADDR is the OTA slot start so erase-while-copy stops there.
  */
 #define BOOT_START_ADDR 						0x08000000
 #define BOOT_IMAGE_SIZE							(12 * 1024)
-#define UPDATE_PARAM_SIZE						(4 * 1024)
-#define BOOT_SIZE								(BOOT_IMAGE_SIZE + UPDATE_PARAM_SIZE)
+#define BOOT_SIZE								(16 * 1024)
 #define BOOT_END_ADDR 							(BOOT_START_ADDR + BOOT_SIZE)
 
 #define DRIVER_START_ADDR 						BOOT_END_ADDR
 #define DRIVER_SIZE								(48 * 1024)
 #define DRIVER_END_ADDR 						(DRIVER_START_ADDR + DRIVER_SIZE)
 
+#define MCU_FLASH_SIZE							(512 * 1024)
+#define MCU_FLASH_PAGE_SIZE						(2 * 1024)
+#define MCU_FLASH_END_ADDR						(BOOT_START_ADDR + MCU_FLASH_SIZE)
+
 #define APP_START_ADDR 							DRIVER_END_ADDR
-#define APP_END_ADDR 							(BOOT_START_ADDR + (256 * 1024))
+#define APP_END_ADDR 							(BOOT_START_ADDR + (192 * 1024))
+
 #define UPDATE_FILE_START_ADDR					APP_END_ADDR
-#define UPDATE_FILE_END_ADDR					(BOOT_START_ADDR + (512 * 1024))
+#define UPDATE_FILE_MAX_SIZE					(188 * 1024)
+#define UPDATE_FILE_END_ADDR					(UPDATE_FILE_START_ADDR + UPDATE_FILE_MAX_SIZE)
+
+#define UPDATE_INFO_START_ADDR					UPDATE_FILE_END_ADDR
+#define PARAM_STORE_ADDR						(UPDATE_INFO_START_ADDR + MCU_FLASH_PAGE_SIZE)
+#define MPU_TIMEOUT_LOG_ADDR					(PARAM_STORE_ADDR + MCU_FLASH_PAGE_SIZE)
 
 /* GD32F305 SRAM is 0x20000000-0x20018000 (96KB; the 64KB RB part is inside this). */
 #define RAM_START_ADDR							0x20000000u

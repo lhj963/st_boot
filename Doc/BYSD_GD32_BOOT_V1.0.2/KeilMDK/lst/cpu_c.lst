@@ -1,0 +1,189 @@
+L 1 "..\Source\os\cpu_c.c"
+N#include "lfos_cfg.h"
+L 1 "..\Source\os\lfos_cfg.h" 1
+N#ifndef __LFOS_CFG_H__
+N#define __LFOS_CFG_H__
+N#ifdef __cplusplus
+Sextern "C" {
+N#endif
+N
+N
+N
+N#define MAX_THREAD_CNT 16
+N
+N//线程最大占用TICK数 占用CPU超过MAX_THREAD_USE_TICK_CNT 将会被系统杀死
+N#define MAX_THREAD_USE_TICK_CNT  20000
+N
+N
+N
+Ntypedef unsigned char INT8U;
+Ntypedef unsigned short INT16U;
+Ntypedef unsigned int INT32U;
+N
+Ntypedef char INT8S;
+Ntypedef short INT16S;
+Ntypedef int INT32S;
+N
+N
+N
+Ntypedef unsigned int OS_STK;
+N
+N
+N
+N
+N
+N
+N
+N#ifdef __cplusplus
+S}
+N#endif
+N
+N
+N#endif
+N
+L 2 "..\Source\os\cpu_c.c" 2
+N#include "lfos.h"
+L 1 "..\Source\os\lfos.h" 1
+N#ifndef __LFOS_H__
+N#define __LFOS_H__
+N
+N#ifdef __cplusplus
+Sextern "C" {
+N#endif
+N
+N#include "lfos_cfg.h"
+N
+N#define SYS_THREAD_STK_SIZE 	64
+N
+Ntypedef struct tagLFOS_SEM
+N{
+N	void *pName;	//信号量名称
+N	INT8U sem_cnt;	//信号量数量
+N	INT32U timeout;
+N}LFOS_SEM;
+N
+Ntypedef struct tagLFOSThread
+N{
+N	OS_STK *sp;				//栈顶指针
+N	OS_STK *bottom;			//栈底指针
+N	OS_STK *sp_init_ptr;	//堆顶初始指针
+N	INT32U stack_freed;		//空闲堆栈
+N
+N	INT8U status;			//线程状态
+N	INT32U dly_tick;		//延时节拍
+N	INT32U use_cpu_tick;	//占用CPU的时间
+N	LFOS_SEM *pSem;			//信号量
+N
+N}LFOSThread;
+N
+N//需要移植的函数
+Nextern void cpu_int_en(void);
+Nextern void cpu_int_dis(void);
+Nextern void start_thread(void);
+Nextern void context_sw(void);
+Nextern void context_sw_int(void);
+Nextern void lfos_thread_stack_init(OS_STK **sp,void *thread_proc);
+N
+Nextern LFOSThread *pCurThread;
+Nextern LFOSThread *pHighThread;
+N
+N
+N
+N//调试相关的函数
+Nextern LFOSThread *lfos_get_thread_ptr(INT8U thread_id);
+Nextern OS_STK *lfos_get_sys_thread_stk_ptr(void);
+N
+N
+N//需要在中断里面调用的函数
+Nextern void lfos_tick(void);
+Nextern void lfos_enter_int(void);
+Nextern void lfos_exit_int(void);
+N
+N
+N//API接口
+Nextern void lfos_init(void);
+Nextern int lfos_create_thread(INT8U thread_id,void (*thread_proc)(void),
+N								OS_STK *sp,OS_STK *bottom);
+Nextern void lfos_start(void);
+Nextern void lfos_sleep(unsigned int t);
+Nextern INT32U lfos_stack_used(unsigned char thread_id);
+Nextern INT32U lfos_stack_freed(unsigned char thread_id);
+Nextern INT16U lfos_get_version(void);
+N
+N
+N//信号量
+Nextern int lfos_create_sem(LFOS_SEM *pSem,void *pName,INT8U cnt);
+Nextern int lfos_sem_pend(LFOS_SEM *pSem,INT32U timeout);
+Nextern int lfos_sem_post(LFOS_SEM *pSem);
+N
+N
+N//mem_lib_id:内存库ID
+Nextern int lfos_create_mem(INT8U mem_lib_id,void *ptr,INT32U block_size,INT32U block_cnt);
+Nextern void *lfos_mem_malloc(INT8U mem_lib_id);
+Nextern int lfos_mem_free(INT8U mem_lib_id,void *ptr);
+Nextern unsigned int lfos_mem_get_block_size(INT8U mem_lib_id);
+N
+N#ifdef __cplusplus
+S}
+N#endif
+N
+N#endif
+N
+L 3 "..\Source\os\cpu_c.c" 2
+N
+N
+N
+N
+Nvoid lfos_thread_stack_init(OS_STK **sp,void *thread_proc)
+N{
+N#if 0
+S	*(--(*sp)) = (OS_STK)thread_proc;
+S	*(--(*sp)) = 0x44444444;
+S	*(--(*sp)) = 0x55555555;
+S	*(--(*sp)) = 0x66666666;
+S	*(--(*sp)) = 0x77777777;
+S	*(--(*sp)) = 0x88888888;
+S	*(--(*sp)) = 0x99999999;
+S	*(--(*sp)) = 0xAAAAAAAA;
+S	*(--(*sp)) = 0xBBBBBBBB;
+S	*(--(*sp)) = 0xCCCCCCCC;
+N#else
+N	*(--(*sp)) = 0x01000000u;								//xPSR
+N	*(--(*sp)) = (OS_STK)thread_proc;						//entry point
+N	*(--(*sp)) = 0xEEEEEEEE;								//LR
+N	*(--(*sp)) = 0xCCCCCCCC;								//R12
+N	*(--(*sp)) = 0x33333333;								//R3
+N	*(--(*sp)) = 0x22222222;								//R2
+N	*(--(*sp)) = 0x11111111;								//R1
+N	*(--(*sp)) = 0x00000000;								//R0
+N
+N	*(--(*sp)) = 0xBBBBBBBB;								//R11
+N	*(--(*sp)) = 0xAAAAAAAA;								//R10
+N	*(--(*sp)) = 0x99999999;								//R9
+N	*(--(*sp)) = 0x88888888;								//R8
+N	*(--(*sp)) = 0x77777777;								//R7
+N	*(--(*sp)) = 0x66666666;								//R6
+N	*(--(*sp)) = 0x55555555;								//R5
+N	*(--(*sp)) = 0x44444444;								//R4
+N#endif
+N
+N}
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N
+N

@@ -21,4 +21,5 @@ SI/
 
 # Release archives belong on GitHub Releases, not in the tree
 *.zip
+*.rar
 BYSD_*_BOOT*.zip

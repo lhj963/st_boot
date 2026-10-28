@@ -7,19 +7,45 @@ extern "C" {
 
 #define BOOT_VERSION 	"BYSD_GD32_BOOT_V1.0.3"
 
-//boot²ã
+/*
+ * Same internal map as the driver (512KB, 2KB pages):
+ *   0x08000000 boot    16KB   (scatter image is 12KB and stays inside this)
+ *   0x08004000 driver  48KB
+ *   0x08010000 app     until the OTA slot
+ *   0x08030000 OTA image 188KB
+ *   0x0805F000 update info
+ *   0x0805F800 param store
+ *   0x08060000 MPU-timeout log
+ * Update info is not in the boot window (the old slot was 0x08003000).
+ * APP_END_ADDR is the OTA slot start so erase-while-copy stops there.
+ */
 #define BOOT_START_ADDR 						0x08000000
+#define BOOT_IMAGE_SIZE							(12 * 1024)
 #define BOOT_SIZE								(16 * 1024)
 #define BOOT_END_ADDR 							(BOOT_START_ADDR + BOOT_SIZE)
 
-//Çý¶¯²ã
 #define DRIVER_START_ADDR 						BOOT_END_ADDR
 #define DRIVER_SIZE								(48 * 1024)
 #define DRIVER_END_ADDR 						(DRIVER_START_ADDR + DRIVER_SIZE)
 
-//app²ã
+#define MCU_FLASH_SIZE							(512 * 1024)
+#define MCU_FLASH_PAGE_SIZE						(2 * 1024)
+#define MCU_FLASH_END_ADDR						(BOOT_START_ADDR + MCU_FLASH_SIZE)
+
 #define APP_START_ADDR 							DRIVER_END_ADDR
-#define APP_END_ADDR 							(0x08000000 + 0x00060000)
+#define APP_END_ADDR 							(BOOT_START_ADDR + (192 * 1024))
+
+#define UPDATE_FILE_START_ADDR					APP_END_ADDR
+#define UPDATE_FILE_MAX_SIZE					(188 * 1024)
+#define UPDATE_FILE_END_ADDR					(UPDATE_FILE_START_ADDR + UPDATE_FILE_MAX_SIZE)
+
+#define UPDATE_INFO_START_ADDR					UPDATE_FILE_END_ADDR
+#define PARAM_STORE_ADDR						(UPDATE_INFO_START_ADDR + MCU_FLASH_PAGE_SIZE)
+#define MPU_TIMEOUT_LOG_ADDR					(PARAM_STORE_ADDR + MCU_FLASH_PAGE_SIZE)
+
+/* GD32F305 SRAM is 0x20000000-0x20018000 (96KB; the 64KB RB part is inside this). */
+#define RAM_START_ADDR							0x20000000u
+#define RAM_END_ADDR							(0x20000000u + (96u * 1024u))
 
 
 
@@ -80,6 +106,11 @@ extern void gpio_init(void);
 
 extern void delayms_by_timer(unsigned int ms);
 
+extern unsigned int get_cpu_flash_size(void);
+
+/* Hold GPRS_RST and GPRS_ON_OFF at field idle (low) across the jump.
+ * The driver powers the modem with its own ON_OFF pulse and leaves both pins low. */
+extern void gprs_idle_before_jump(void);
 
 extern void bsp_init(void);
 

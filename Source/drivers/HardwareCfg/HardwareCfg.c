@@ -111,10 +111,19 @@ void gpio_init(void)
 	pin_high(GPRS_PWR_RCC,GPRS_PWR_PORT,GPRS_PWR_PIN);
 	pin_high(MCU_WAKE_UP_4G_RCC,MCU_WAKE_UP_4G_PORT,MCU_WAKE_UP_4G_PIN);
 	pin_low(GPRS_DTR_RCC,GPRS_DTR_PORT,GPRS_DTR_PIN);
+	/* Hold the modem in reset until the image is about to run. */
 	pin_low(GPRS_ON_OFF_RCC,GPRS_ON_OFF_PORT,GPRS_ON_OFF_PIN);
 	pin_low(GPRS_RST_RCC,GPRS_RST_PORT,GPRS_RST_PIN);
 
 	GPIO_PinRemapConfig(GPIO_Remap_SWJ_NoJTRST,ENABLE);
+}
+
+void gprs_idle_before_jump(void)
+{
+	/* Same level as gpio_init and as the driver after its power-key pulse.
+	 * Leaving either pin high holds the 4G reset or ON_OFF key into the image. */
+	pin_low(GPRS_RST_RCC,GPRS_RST_PORT,GPRS_RST_PIN);
+	pin_low(GPRS_ON_OFF_RCC,GPRS_ON_OFF_PORT,GPRS_ON_OFF_PIN);
 }
 
 void bsp_init(void)

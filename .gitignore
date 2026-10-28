@@ -1,4 +1,7 @@
-﻿*.o
+# Keil MDK build outputs
+KeilMDK/lst/
+KeilMDK/output/
+*.o
 *.obj
 *.d
 *.crf
@@ -9,4 +12,14 @@
 *.uvguix.*
 JLinkLog.txt
 EventRecorderStub.scvd
+
+# Source Insight
+SI/
+
+# Local backups
 .git_backup_local/
+
+# Release archives belong on GitHub Releases, not in the tree
+*.zip
+*.rar
+BYSD_*_BOOT*.zip

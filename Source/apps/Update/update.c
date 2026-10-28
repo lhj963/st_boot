@@ -232,6 +232,8 @@ void JumpToApp(void)
 	SpAddress = *(__IO uint32_t *)DRIVER_START_ADDR;
 	JumpAddress = *(__IO uint32_t *)(DRIVER_START_ADDR + 4);
 
+	/* Installed images live in driver/app, below the OTA slot. An empty
+	 * update page still reaches this check and jumps when the vector is valid. */
 	if (!boot_vector_is_valid(SpAddress, JumpAddress,
 			RAM_START_ADDR, RAM_END_ADDR,
 			DRIVER_START_ADDR, APP_END_ADDR))
@@ -244,7 +246,7 @@ void JumpToApp(void)
 	DBG_Print(LEVEL0,"\r\nJump to Driver(Reset:%08X SP:%08X)...\r\n",JumpAddress,SpAddress);
 	delayms(500);	//稍微延时 等待串口打印完毕
 
-	gprs_release_before_jump();
+	gprs_idle_before_jump();
 	boot_hf_clear();
 
 	cpu_int_dis();
@@ -712,7 +714,11 @@ void check_remote_update(void)
 		(unsigned int)(sizeof(stUpdateInfo) - sizeof(stUpdateInfo.ulHeaderCrc)));
 	if (!boot_update_header_ok(&stUpdateInfo,crc))
 	{
-		/* Erased flash is the normal no-update case. Keep that boot quiet. */
+		/* Erased flash is the normal no-update case. Keep that boot quiet.
+		 * Do not read the old record at 0x08003000. That page is inside the
+		 * boot window and has no magic or header CRC. An upgrade left there
+		 * must be started again after this bootloader and the driver are paired.
+		 */
 		if (stUpdateInfo.magic != 0xFFFFFFFFu)
 		{
 			DBG_Print(LEVEL0,"update info rejected\r\n");

@@ -118,11 +118,12 @@ void gpio_init(void)
 	GPIO_PinRemapConfig(GPIO_Remap_SWJ_NoJTRST,ENABLE);
 }
 
-void gprs_release_before_jump(void)
+void gprs_idle_before_jump(void)
 {
-	/* HardwareCfg: 1 = not reset, 0 = reset. Release both before the image runs. */
-	pin_high(GPRS_RST_RCC,GPRS_RST_PORT,GPRS_RST_PIN);
-	pin_high(GPRS_ON_OFF_RCC,GPRS_ON_OFF_PORT,GPRS_ON_OFF_PIN);
+	/* Same level as gpio_init and as the driver after its power-key pulse.
+	 * Leaving either pin high holds the 4G reset or ON_OFF key into the image. */
+	pin_low(GPRS_RST_RCC,GPRS_RST_PORT,GPRS_RST_PIN);
+	pin_low(GPRS_ON_OFF_RCC,GPRS_ON_OFF_PORT,GPRS_ON_OFF_PIN);
 }
 
 void bsp_init(void)

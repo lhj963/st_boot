@@ -10,6 +10,7 @@ extern "C" {
 
 /*
  * On-flash UpdateInfo at 0x0805F000 (one page, after the OTA slot).
+ * The driver must write this packed record. Boot does not read 0x08003000.
  *
  * The record is packed and does not use a C enum, so --short-enums and
  * --enum_is_int cannot move ulStartAddr. usLayoutBytes must equal

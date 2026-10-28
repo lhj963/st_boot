@@ -8,6 +8,13 @@ Map matches the driver (512KB, 2KB pages):
 	param store:0x0805F800
 	MPU timeout log:0x08060000
 APP_END is the OTA slot start. Update info is not in the boot window.
+Boot applies an upgrade only from a packed UPD1 record at 0x0805F000
+(magic 0x31445055, layout size 140, header CRC-32). A valid driver or
+app vector still boots when that page is empty or the status is not FILE_OK.
+An in-flight upgrade left at 0x08003000 is not completed. Re-trigger it
+after this bootloader and the driver are flashed together.
+GPRS_RST and GPRS_ON_OFF stay low across the jump (field idle). The
+driver pulses ON_OFF itself to start the 4G module.
 
 BYSD_GD32_BOOT_V1.0.2
 1.4g power pin high

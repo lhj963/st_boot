@@ -139,6 +139,45 @@ static void test_update_info(void)
 	assert(boot_image_fits_partition(250u * 1024u, MAP_DRIVER, MAP_APP_END) == 0);
 }
 
+/* A driver that stores this packed record at 0x0805F000 is accepted.
+ * The legacy layout (status byte 0x56 at offset 0, no magic) is not. */
+static void test_upd1_record_accepted(void)
+{
+	UpdateInfo info;
+	unsigned char legacy[140];
+	unsigned int crc;
+	unsigned int image_len = 64u * 1024u;
+
+	memset(&info, 0, sizeof(info));
+	info.eUpdateStatus = (uint8_t)UPDATE_STATUS_FILE_OK;
+	info.ucUpdateWay = 3;
+	info.ulStartAddr = MAP_APP_END;
+	info.ulEndAddr = MAP_APP_END + image_len - 1u;
+	info.ulTotalBytes = image_len;
+	info.usTotalPackCnt = 64;
+	memcpy(info.szUpdateFileName, "app.bin", 7);
+	seal(&info);
+
+	crc = header_crc(&info);
+	assert(info.magic == 0x31445055u);
+	assert(info.usLayoutBytes == 140u);
+	assert(boot_update_header_ok(&info, crc) == 1);
+	assert(boot_update_bounds_ok(info.ulStartAddr, info.ulTotalBytes,
+		MAP_APP_END, MAP_STAGING_END) == 1);
+	assert(boot_image_fits_partition(info.ulTotalBytes, MAP_APP, MAP_APP_END) == 1);
+
+	/* Installed image still boots when the record is finished, not pending. */
+	info.eUpdateStatus = (uint8_t)UPDATE_STATUS_UPDATE_OK;
+	seal(&info);
+	crc = header_crc(&info);
+	assert(boot_update_header_ok(&info, crc) == 1);
+	assert(info.eUpdateStatus != UPDATE_STATUS_FILE_OK);
+
+	memset(legacy, 0, sizeof(legacy));
+	legacy[0] = (unsigned char)UPDATE_STATUS_FILE_OK;
+	assert(boot_update_header_ok((const UpdateInfo *)legacy, 0) == 0);
+}
+
 static void test_classify_and_slot(void)
 {
 	int is_driver = 1;
@@ -218,6 +257,7 @@ int main(void)
 	test_layout();
 	test_vector();
 	test_update_info();
+	test_upd1_record_accepted();
 	test_classify_and_slot();
 	test_program_result();
 	printf("boot_check_test: ok\n");

@@ -108,8 +108,9 @@ extern void delayms_by_timer(unsigned int ms);
 
 extern unsigned int get_cpu_flash_size(void);
 
-/* Deassert GPRS_RST and GPRS_ON_OFF (1 = not reset) before leaving the bootloader. */
-extern void gprs_release_before_jump(void);
+/* Hold GPRS_RST and GPRS_ON_OFF at field idle (low) across the jump.
+ * The driver powers the modem with its own ON_OFF pulse and leaves both pins low. */
+extern void gprs_idle_before_jump(void);
 
 extern void bsp_init(void);
 
